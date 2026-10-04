@@ -6,6 +6,7 @@
 #include "random.hpp"
 #include "cloud.hpp"
 #include "catalog_search.hpp"
+#include "virtual_keyboard.hpp"
 #include "stream/native/gpu_presenter.hpp"
 #ifndef OPENNOW_HOST_PREVIEW
 #include "stream/stream.hpp"
@@ -48,6 +49,17 @@ int pad=-1;
 unsigned lastButtons=0;
 opennow::CatalogSearch searchInput;
 char pendingSearch[128]{};
+opennow::VirtualKeyboard streamKeyboard;
+bool virtualMouse=false,publishedVirtual=false,publishedKeyboard=false;
+unsigned mouseSpeed=1,publishedSpeed=1,inputGeneration=0,publishedGeneration=0;
+std::array<opennow::hid::Stroke,64> pendingKeys{};
+unsigned pendingKeyHead=0,pendingKeyCount=0;
+// Called by the UI with viewMutex held. No plaintext input buffer or input logging.
+bool enqueueKey(opennow::hid::Stroke stroke) {
+    if(!stroke.vk||pendingKeyCount==pendingKeys.size())return false;
+    pendingKeys[(pendingKeyHead+pendingKeyCount++)%pendingKeys.size()]=stroke;
+    return true;
+}
 void publish(const opennow::View& v) {
     pthread_mutex_lock(&viewMutex); published=v; pthread_mutex_unlock(&viewMutex);
 }
@@ -139,7 +151,16 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
             if(cloud.view().state==opennow::CloudState::ready&&!streamAttempted){streamAttempted=true;stream.start(cloud.session(),id);}
             if(stream.active()){
-                stream.tick(now);PS5_PadData padState{};pthread_mutex_lock(&viewMutex);padState=publishedPad;pthread_mutex_unlock(&viewMutex);stream.input(padState,now);
+                stream.tick(now);
+                PS5_PadData padState{};
+                pthread_mutex_lock(&viewMutex);
+                padState=publishedPad;
+                stream.virtualMode(publishedVirtual,publishedKeyboard,publishedSpeed,publishedGeneration);
+                while(pendingKeyCount&&stream.keyStroke(pendingKeys[pendingKeyHead])) {
+                    pendingKeys[pendingKeyHead]={};pendingKeyHead=(pendingKeyHead+1)%pendingKeys.size();--pendingKeyCount;
+                }
+                pthread_mutex_unlock(&viewMutex);
+                stream.input(padState,now);
             }
 #endif
         }
@@ -155,6 +176,54 @@ void* worker(void*) {
         sceKernelUsleep(publishedStream?2000:100000);
     }
 }
+void drawVirtualControls(Canvas& c) {
+    using ps5::demo::Color;
+    c.beginOverlay();
+    const auto panel=static_cast<Color>(0xff1c1610),accent=static_cast<Color>(0xff9ee656);
+    const auto hint=[&](unsigned x,unsigned y,Canvas::Button button,std::string_view label) {
+        c.button(x,y,button,40,accent);c.text(x+52,y+13,label,2,Color::white);
+    };
+    c.rectangle(40,25,1840,145,panel);
+    c.text(65,42,streamKeyboard.open?"VIRTUAL KEYBOARD":"VIRTUAL MOUSE",3,Color::white);
+    hint(600,32,Canvas::Button::touchpad,"GAMEPAD");
+    hint(1000,32,Canvas::Button::triangle,streamKeyboard.open?"CLOSE KEYBOARD":"KEYBOARD");
+    if(!streamKeyboard.open) {
+        hint(65,108,Canvas::Button::right_stick,mouseSpeed==0?"MOVE / SLOW":mouseSpeed==1?"MOVE / NORMAL":"MOVE / FAST");
+        hint(500,108,Canvas::Button::r2,"LEFT CLICK");
+        hint(780,108,Canvas::Button::l2,"RIGHT CLICK");
+        hint(1080,108,Canvas::Button::dpad,"SCROLL");
+        hint(1390,108,Canvas::Button::square,"SPEED");
+    } else c.text(65,120,"MOUSE PAUSED / SELECT A KEY BELOW",2,Color::white);
+    if(streamKeyboard.open) {
+        c.rectangle(40,510,1840,530,panel);
+        c.text(70,530,"REMOTE KEYBOARD / US QWERTY / INPUT ALWAYS MASKED",3,Color::white);
+        char masked[41]{};std::memset(masked,'*',std::min(40u,streamKeyboard.maskedCount));
+        c.text(70,575,masked,3,accent);
+        for(unsigned i=0;i<streamKeyboard.count();++i) {
+            const unsigned x=80+(i%10)*178,y=635+(i/10)*58;
+            if(i==streamKeyboard.selected)c.rectangle(x-8,y-8,165,48,accent);
+            const auto color=i==streamKeyboard.selected?panel:Color::white;
+            auto key=streamKeyboard.label(i);
+            char uppercase=0;
+            if(key.size()==1&&key[0]>='a'&&key[0]<='z'&&(streamKeyboard.modifiers&1)) {
+                uppercase=key[0]-'a'+'A';key=std::string_view(&uppercase,1);
+            }
+            if(key==" ")key="SPACE";
+            c.text(x,y,key,2,color);
+        }
+        c.text(700,575,(streamKeyboard.modifiers&1)?"SHIFT ON":"SHIFT OFF",2,accent);
+        c.text(1000,575,(streamKeyboard.modifiers&2)?"CTRL ON":"CTRL OFF",2,accent);
+        c.text(1300,575,(streamKeyboard.modifiers&4)?"ALT ON":"ALT OFF",2,accent);
+        hint(70,940,Canvas::Button::dpad,"MOVE");
+        hint(420,940,Canvas::Button::cross,"TYPE");
+        hint(750,940,Canvas::Button::square,"BACKSPACE");
+        hint(1190,940,Canvas::Button::options,"ENTER");
+        hint(70,990,Canvas::Button::circle,"CLOSE");
+        hint(420,990,Canvas::Button::l1,"SHIFT");
+        hint(750,990,Canvas::Button::r1,"SYMBOLS");
+    }
+    c.endOverlay();
+}
 bool draw(ps5::demo::Canvas& c) noexcept {
     using ps5::demo::Color;
     if (pad<0) {
@@ -167,7 +236,49 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         pressed=data.buttons & ~lastButtons; lastButtons=data.buttons;
     } else lastButtons=0;
     opennow::View v;opennow::CloudView cv;bool streaming=false;opennow::StreamProfile profile;
-    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;publishedPad=data;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
+    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
+    const bool exitStream=streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD);
+    pthread_mutex_lock(&viewMutex);
+    if(!streaming||!data.connected||exitStream) {
+        if(virtualMouse){++inputGeneration;virtualMouse=false;}
+        streamKeyboard.reset();pendingKeys={};pendingKeyCount=pendingKeyHead=0;
+    } else {
+        if((pressed&PS5_PAD_BUTTON_TOUCH_PAD)&&!(data.buttons&PS5_PAD_BUTTON_OPTIONS)) {
+            virtualMouse=!virtualMouse;++inputGeneration;streamKeyboard.reset();
+            pendingKeys={};pendingKeyCount=pendingKeyHead=0;
+        }
+        if(virtualMouse) {
+            if(pressed&PS5_PAD_BUTTON_TRIANGLE){streamKeyboard.open=!streamKeyboard.open;++inputGeneration;streamKeyboard.modifiers=0;streamKeyboard.maskedCount=0;pendingKeys={};pendingKeyCount=pendingKeyHead=0;}
+            if(streamKeyboard.open) {
+                if(pressed&PS5_PAD_BUTTON_LEFT)streamKeyboard.move(-1,0);
+                if(pressed&PS5_PAD_BUTTON_RIGHT)streamKeyboard.move(1,0);
+                if(pressed&PS5_PAD_BUTTON_UP)streamKeyboard.move(0,-1);
+                if(pressed&PS5_PAD_BUTTON_DOWN)streamKeyboard.move(0,1);
+                if(pressed&PS5_PAD_BUTTON_L1)streamKeyboard.modifiers^=1;
+                if(pressed&PS5_PAD_BUTTON_R1){streamKeyboard.symbolPage=!streamKeyboard.symbolPage;streamKeyboard.selected=0;}
+                opennow::hid::Stroke stroke{};
+                if(pressed&PS5_PAD_BUTTON_CROSS)stroke=streamKeyboard.choose();
+                if(pressed&PS5_PAD_BUTTON_SQUARE)stroke={8,0};
+                if(pressed&PS5_PAD_BUTTON_OPTIONS)stroke={13,0};
+                if(enqueueKey(stroke)) {
+                    if(stroke.vk==8){if(streamKeyboard.maskedCount)--streamKeyboard.maskedCount;}
+                    else if(stroke.vk==13||stroke.vk==9||stroke.vk==27)streamKeyboard.maskedCount=0;
+                    else if(stroke.vk>=32&&!(stroke.modifiers&6))++streamKeyboard.maskedCount;
+                }
+                if(pressed&PS5_PAD_BUTTON_CIRCLE){streamKeyboard.reset();++inputGeneration;pendingKeys={};pendingKeyCount=pendingKeyHead=0;}
+            } else if(pressed&PS5_PAD_BUTTON_SQUARE)mouseSpeed=(mouseSpeed+1)%3;
+        }
+    }
+    publishedPad=data;publishedVirtual=virtualMouse;publishedKeyboard=streamKeyboard.open;
+    publishedSpeed=mouseSpeed;publishedGeneration=inputGeneration;
+    pthread_mutex_unlock(&viewMutex);
+#ifdef OPENNOW_HOST_PREVIEW
+    if(std::getenv("OPENNOW_PREVIEW_KEYBOARD")) {
+        virtualMouse=true;streamKeyboard.open=true;
+        streamKeyboard.symbolPage=std::getenv("OPENNOW_PREVIEW_SYMBOLS")!=nullptr;
+        c.clear(static_cast<Color>(0xff302822));drawVirtualControls(c);return true;
+    }
+#endif
     static bool searchWasOpen=false;
     bool searchChanged=searchWasOpen;
     if(v.state!=State::authenticated||streaming)searchInput.open=false;
@@ -208,7 +319,13 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         if(pressed&PS5_PAD_BUTTON_R1)command.store(7);
     }
 #ifndef OPENNOW_HOST_PREVIEW
-    if(streaming&&media.frames.load())return media.draw(c);
+    if(streaming&&media.frames.load()) {
+        if(!media.draw(c))return false;
+        if(virtualMouse) {
+            drawVirtualControls(c);
+        }
+        return true;
+    }
 #endif
     static opennow::CloudView previousCloud;
     static opennow::View previous;

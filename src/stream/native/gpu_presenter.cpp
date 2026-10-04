@@ -44,6 +44,17 @@ uniform sampler2D yTex;uniform sampler2D uvTex;
 uniform vec2 crop;uniform int mode;uniform int fullRange;
 void main(){
  if(mode==0){color=texture(yTex,uv);return;}
+ if(mode==4||mode==5){
+  vec4 ui=texture(yTex,uv);if(ui.a<0.5)discard;
+  if(mode==4){color=ui;return;}
+  // SDR UI at 203 nits in the HDR scanout, rather than PQ peak white.
+  vec3 linear=mix(pow((ui.rgb+0.055)/1.055,vec3(2.4)),ui.rgb/12.92,lessThanEqual(ui.rgb,vec3(0.04045)));
+  linear=mat3(0.6274,0.0691,0.0164,0.3293,0.9195,0.0880,0.0433,0.0114,0.8956)*linear;
+  vec3 luminance=pow(clamp(linear,0.0,1.0)*0.0203,vec3(0.1593017578125));
+  vec3 pq=pow((0.8359375+18.8515625*luminance)/(1.0+18.6875*luminance),vec3(78.84375));
+  uvec3 q=uvec3(round(pq*1023.0));uint w=q.r|(q.g<<10u)|(q.b<<20u)|(3u<<30u);
+  color=vec4(float((w>>16u)&255u),float((w>>8u)&255u),float(w&255u),float(w>>24u))/255.0;return;
+ }
  vec2 pos=uv*crop;float y=texture(yTex,pos).r;vec2 c=texture(uvTex,pos).rg;
  vec3 rgb;
  if(mode==2){y=(y*65535.0-64.0)/876.0;c=(c*65535.0-512.0)/896.0;
@@ -209,6 +220,14 @@ void drawInterface(const std::uint32_t* pixels) noexcept {
  glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1920,1080,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
  glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),0);glDrawArrays(GL_TRIANGLES,0,3);
 }
+void drawOverlay(const std::uint32_t* pixels) noexcept {
+ if(!ready||!pixels)return;
+ glUseProgram(program);glBindVertexArray(vao);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,uiTexture);
+ glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1920,1080,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+ glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+ glUniform1i(glGetUniformLocation(program,"yTex"),0);glUniform1i(glGetUniformLocation(program,"mode"),hdrScanout?5:4);
+ glDrawArrays(GL_TRIANGLES,0,3);
+}
 bool swap() noexcept{return ready&&eglSwapBuffers(display,window)==EGL_TRUE;}
 bool takeVideoDrawn() noexcept{const bool drawn=videoDrawn;videoDrawn=false;return drawn;}
 const char* outputLabel() noexcept{return label;}
@@ -219,6 +238,7 @@ bool initialize() noexcept{return false;}bool available() noexcept{return false;
 void shutdown() noexcept{}
 bool profileAvailable(StreamProfile) noexcept{return false;}StreamProfile bestProfile() noexcept{return StreamProfile::quality;}
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept{return false;}
+void drawOverlay(const std::uint32_t*) noexcept{}
 void drawInterface(const std::uint32_t*) noexcept{}bool swap() noexcept{return false;}
 bool takeVideoDrawn() noexcept{return false;}
 const char* outputLabel() noexcept{return "1080P SDR / STEREO";}

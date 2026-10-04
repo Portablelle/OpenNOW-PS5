@@ -57,3 +57,6 @@ for test in nvst_qos_test video_capture_test compressed_queue_test surface_finge
  ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc "tests/$test.cpp" -o "build/host-tests/$test"
  "build/host-tests/$test"
 done
+
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/remote_input_test.cpp -o build/host-tests/remote-input-test
+build/host-tests/remote-input-test

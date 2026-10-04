@@ -108,7 +108,7 @@ struct Glyph
     std::array<std::uint8_t, 7> rows;
 };
 
-constexpr std::array<Glyph, 75> glyphs{{
+constexpr std::array<Glyph, 95> glyphs{{
     {' ', {0, 0, 0, 0, 0, 0, 0}},        {'0', {14, 17, 19, 21, 25, 17, 14}},
     {'1', {4, 12, 4, 4, 4, 4, 14}},      {'2', {14, 17, 1, 2, 4, 8, 31}},
     {'3', {30, 1, 1, 14, 1, 1, 30}},     {'4', {2, 6, 10, 18, 31, 2, 2}},
@@ -166,6 +166,26 @@ constexpr std::array<Glyph, 75> glyphs{{
     {')', {8,4,2,2,2,4,8}},
     {'+', {0,4,4,31,4,4,0}},
     {'|', {4,4,4,4,4,4,4}},
+    {'!', {4,4,4,4,4,0,4}},
+    {'@', {14,17,23,21,23,16,14}},
+    {'#', {10,31,10,10,31,10,0}},
+    {'$', {4,15,20,14,5,30,4}},
+    {'%', {25,25,2,4,8,19,19}},
+    {'^', {4,10,17,0,0,0,0}},
+    {'*', {0,21,14,31,14,21,0}},
+    {'[', {14,8,8,8,8,8,14}},
+    {']', {14,2,2,2,2,2,14}},
+    {'{', {6,8,8,16,8,8,6}},
+    {'}', {12,2,2,1,2,2,12}},
+    {'\\', {16,8,8,4,2,2,1}},
+    {';', {0,4,4,0,4,4,8}},
+    {'\'', {4,4,8,0,0,0,0}},
+    {'"', {10,10,0,0,0,0,0}},
+    {',', {0,0,0,0,4,4,8}},
+    {'<', {2,4,8,16,8,4,2}},
+    {'>', {8,4,2,1,2,4,8}},
+    {'`', {8,4,2,0,0,0,0}},
+    {'~', {0,0,9,22,0,0,0}},
 }};
 
 class File final
@@ -403,6 +423,19 @@ void Canvas::image(unsigned x,unsigned y,unsigned width,unsigned height,const st
         put_pixel_unchecked(pixels_,x+col,y+row,static_cast<Color>(data[row*width+col]));
 }
 
+void Canvas::beginOverlay() noexcept
+{
+#ifndef OPENNOW_HOST_PREVIEW
+    if(opennow::gpu::available())clear(static_cast<Color>(0));
+#endif
+}
+void Canvas::endOverlay() noexcept
+{
+#ifndef OPENNOW_HOST_PREVIEW
+    if(opennow::gpu::available())opennow::gpu::drawOverlay(pixels_);
+#endif
+}
+
 void Canvas::clear(Color color) noexcept
 {
     fill_rect(pixels_, 0, 0, frame_width, frame_height, color);
@@ -487,6 +520,20 @@ void Canvas::button(unsigned x, unsigned y, Button button, unsigned size, Color 
                     for (float yy : {.30f, .50f, .70f})
                         ink |= line(px, py, .25f, yy, .75f, yy) < .03f;
                     break;
+                case Button::touchpad:
+                {
+                    const float qx=std::max(std::abs(px-.5f)-.35f,0.0f);
+                    const float qy=std::max(std::abs(py-.5f)-.16f,0.0f);
+                    ink=std::abs(std::hypot(qx,qy)-.04f)<.025f;
+                    for(float xx:{.3f,.5f,.7f})for(float yy:{.43f,.57f})
+                        ink|=std::hypot(px-xx,py-yy)<.02f;
+                    break;
+                }
+                case Button::right_stick:
+                    ink=std::abs(std::hypot(px-.5f,py-.5f)-.34f)<.03f;
+                    break;
+                case Button::l2:
+                case Button::r2:
                 case Button::l1:
                 case Button::r1:
                 {
@@ -513,11 +560,12 @@ void Canvas::button(unsigned x, unsigned y, Button button, unsigned size, Color 
             put_pixel_unchecked(pixels_, x+column, y+row, static_cast<Color>(blended));
         }
     }
-    if (button == Button::l1 || button == Button::r1)
+    if (button == Button::l1 || button == Button::r1 || button == Button::l2 || button == Button::r2 || button == Button::right_stick)
     {
         const unsigned scale = size / 20;
-        draw_text(pixels_, x + (size - 11*scale)/2, y + (size - 7*scale)/2,
-                  button == Button::l1 ? "L1" : "R1", scale, color);
+        const std::string_view label=button==Button::l1?"L1":button==Button::r1?"R1":button==Button::l2?"L2":button==Button::r2?"R2":"R";
+        draw_text(pixels_, x + (size - (label.size()*6-1)*scale)/2, y + (size - 7*scale)/2,
+                  label, scale, color);
     }
 }
 

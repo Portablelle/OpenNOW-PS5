@@ -8,6 +8,7 @@ extern "C" {
 #include "sdp.hpp"
 #include "nvst_qos.hpp"
 #include "video_capture.hpp"
+#include "remote_input.hpp"
 extern "C" {
 #include "peer_connection.h"
 }
@@ -21,6 +22,8 @@ public:
  void tick(std::uint64_t now);
  void input(const PS5_PadData&,std::uint64_t now);
  void stop();
+ void virtualMode(bool enabled,bool keyboard,unsigned speed,unsigned generation);
+ bool keyStroke(hid::Stroke s){return inputReady_&&virtualMode_&&remoteInput_.tap(s);}
  bool active() const {return pc_&&ws_&&ws_->is_connected();}
  const char* status() const {return status_;}
 private:
@@ -31,6 +34,10 @@ private:
  static void video(const PeerVideoPacket*,void*);static void audio(const PeerAudioPacket*,void*);
  static void dataMessage(char*,std::size_t,void*,std::uint16_t);
  static void dataOpen(void*);static void dataClose(void*);
+ bool sendInput(const std::vector<std::uint8_t>&);
+ hid::RemoteInput remoteInput_;
+ bool virtualMode_=false,virtualKeyboard_=false;unsigned mouseSpeed_=1,inputGeneration_=0;
+ std::uint64_t nextWheel_=0,nextCursorCapture_=0;float mouseX_=0,mouseY_=0;
  Media& media_;PeerConnection* pc_=nullptr;WebSocketClient* ws_=nullptr;
  StreamSettings settings_{};Session session_{};char status_[192]{};std::string name_;int peerId_=0,remoteId_=0,ack_=0,protocol_=2;
  bool runtimeReady_=false,answerSent_=false,inputReady_=false;std::vector<std::string> candidates_;

@@ -12,7 +12,7 @@ An experimental native PS5 homebrew client for GeForce NOW, based on the public 
 
 **This is a working, console-tested prototype, not a finished application.** You can sign in, launch a game and play. The interface is still rough and primarily exists to test that authentication, streaming, audio, video and controls work together. Expect an incomplete user experience, limited navigation and functionality that still needs further testing.
 
-**Latest prerelease: [0.0.5-alpha](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.5-alpha)** — development build `00.002.035`, title ID `PPSA99082`, with aligned controller icons, a numeric search keypad, explicit HDR/SDR profiles and persistent NVIDIA login. This project is unofficial and unaffiliated with Sony or NVIDIA.
+**Latest prerelease: [0.0.6](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.6)** — development build `00.002.036`, title ID `PPSA99082`, with a DualSense virtual mouse, a masked remote keyboard and PS5 control icons for launcher logins and menus. This project is unofficial and unaffiliated with Sony or NVIDIA.
 
 ## What works
 
@@ -36,7 +36,7 @@ Performance may differ by game, server, network, display and profile. Requested 
 
 ## Install the alpha
 
-1. Download `OpenNOW-PS5-0.0.5-alpha.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
+1. Download `OpenNOW-PS5-0.0.6.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
@@ -58,6 +58,28 @@ Requires a PS5 environment that can run native homebrew titles, a GeForce NOW ac
 | Circle | Close the app from the menu; cancel text entry in the search keyboard |
 | L1+R1 together | Sign out and remove the saved login |
 | Options + touchpad | Stop gameplay streaming |
+| Touchpad alone during streaming | Toggle virtual mouse / gamepad |
+| Right stick in virtual mouse mode | Move the remote pointer |
+| R2 / L2 in virtual mouse mode | Left / right mouse button (hold to drag) |
+| D-pad in virtual mouse mode | Vertical / horizontal scrolling |
+| Square in virtual mouse mode | Cycle slow / normal / fast pointer speed |
+| Triangle in virtual mouse mode | Open / close the remote keyboard |
+
+The remote keyboard uses US QWERTY, matching the session's requested layout.
+Navigate with the D-pad, press Cross to type, Square for Backspace, Options for
+Enter and Circle to close. L1 toggles Shift and R1 switches between letters and
+symbols. Enter, Escape, Tab, arrows, Shift, Ctrl and Alt also have selectable keys;
+Ctrl and Alt apply to subsequent strokes until toggled off. The local feedback
+always shows asterisks and never stores or logs a plaintext input string. Remote
+fields remain responsible for their own password masking. Closing the keyboard,
+leaving virtual mode, disconnecting the controller or stopping the stream cancels
+pending strokes and releases successfully sent keys and mouse buttons. Failed
+releases are retried while the input channel is available.
+
+This implementation targets launcher logins and menus. It includes software-video
+and native GPU overlays, but remote cursor capture, text entry and HDR overlay
+appearance still require console validation. USB keyboard/mouse support is not
+included. Virtual keyboard/mouse controls are included in 0.0.6.
 
 In the search keyboard, use the D-pad to select a character and Cross to type it. Square deletes a character, Triangle clears the text, Options submits the search and Circle cancels. R1 advances through search results; Square in the catalog returns to the full catalog.
 
@@ -96,6 +118,6 @@ Generated packages are written to `dist/`. CI checks host behavior; it does not 
 
 The PS5 platform, decoder and GPU work also builds on public projects including ProsperoLight, the PS5 hardware video research, Kodi PS5, ps5-opengl and the native application boilerplate. Their specific roles, licenses and source revisions are retained in the third-party notices and source headers.
 
-See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.5-alpha.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
+See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.6.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
 
 The combined native application is **GPL-3.0-or-later**. Third-party components retain their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `licenses/` and source headers. Exact upstream revisions and hashes are recorded in [upstream-lock.json](upstream-lock.json). Public dependency retrieval/build scripts and local GPU modifications are included; no captured game content is distributed.

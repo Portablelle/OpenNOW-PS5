@@ -52,9 +52,11 @@ bool Stream::start(const Session& s,const char* device) {
 }
 void Stream::stop() {
  capture_.close();
+ remoteInput_.release();
  if(pc_){PS5_PadData neutral{};input(neutral,lastInput_+20000);peer_connection_close(pc_);peer_connection_destroy(pc_);pc_=nullptr;}
  if(ws_){ws_->disconnect();delete ws_;ws_=nullptr;}
  if(runtimeReady_){peer_deinit();runtimeReady_=false;}
+ remoteInput_=hid::RemoteInput{};virtualMode_=virtualKeyboard_=false;mouseX_=mouseY_=0;nextWheel_=nextCursorCapture_=0;
  media_.stop();secureErase(&session_,sizeof(session_));
 }
 void Stream::send(cJSON* root){char* value=cJSON_PrintUnformatted(root);if(value&&ws_)ws_->send_message(value);cJSON_free(value);}
@@ -104,6 +106,13 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_))break;
  if(inputReady_&&!qosRequested_){
   if(peer_connection_create_datachannel_sid(pc_,DATA_CHANNEL_PARTIAL_RELIABLE_TIMED_UNORDERED,0,300,const_cast<char*>("control_channel_partially_reliable"),const_cast<char*>(""),6)>=0){qosRequested_=true;opennow_media_note("NVST QoS control requested sid=6 lifetime=300");}
  }
+ // Ask the server to composite the actual pointer into video; do not invent
+ // a local position from relative deltas. Repeat on the timed control channel.
+ if(virtualMode_&&peer_connection_datachannel_is_open(pc_,6)&&now>=nextCursorCapture_) {
+  char cursor[]={8,3,1,0,1};
+  peer_connection_datachannel_send_binary_sid(pc_,cursor,sizeof(cursor),6);
+  nextCursorCapture_=now+1000000;
+ }
  if(peer_connection_datachannel_is_open(pc_,6)&&now>=nextQos_){
   PeerVideoRtpStats stats{};peer_connection_get_video_rtp_stats(pc_,&stats);
   const auto sample=qos_.next(stats.latest_rtp_timestamp);auto bytes=qos_.packet(sample,now-started_>=1900000);
@@ -148,7 +157,41 @@ if(!answerSent_)peerInfo();
  }
  if(!media_.frames&&now-started_>45000000){char last[192];std::snprintf(last,sizeof(last),"%s",status_);stop();std::snprintf(status_,sizeof(status_),"Video timeout: %.170s",last);}
 }
-void Stream::input(const PS5_PadData& pad,std::uint64_t now){if(!inputReady_||!pc_||now-lastInput_<16000)return;lastInput_=now;
+bool Stream::sendInput(const std::vector<std::uint8_t>& bytes) {
+ return pc_&&inputReady_&&peer_connection_datachannel_send_binary_sid(pc_,reinterpret_cast<char*>(const_cast<std::uint8_t*>(bytes.data())),bytes.size(),0)>=0;
+}
+void Stream::virtualMode(bool enabled,bool keyboard,unsigned speed,unsigned generation) {
+ if(enabled!=virtualMode_||keyboard!=virtualKeyboard_||generation!=inputGeneration_) {
+  remoteInput_.release();mouseX_=mouseY_=0;nextWheel_=0;
+ }
+ virtualMode_=enabled;virtualKeyboard_=keyboard;mouseSpeed_=std::min(speed,2u);inputGeneration_=generation;
+}
+void Stream::input(const PS5_PadData& source,std::uint64_t now){if(!inputReady_||!pc_||now-lastInput_<16000)return;
+ const auto elapsed=lastInput_?std::min<std::uint64_t>(now-lastInput_,50000):16000;lastInput_=now;
+ auto sendHid=[&](const auto& bytes){return sendInput(bytes);};
+ if(!source.connected)remoteInput_.release();
+ const bool flushed=remoteInput_.flush(protocol_,now,sendHid);
+ if(virtualMode_&&source.connected&&flushed&&!virtualKeyboard_) {
+  remoteInput_.mouse(1,(source.buttons&PS5_PAD_BUTTON_R2)||source.analogButtons.r2>32,protocol_,now,sendHid);
+  remoteInput_.mouse(3,(source.buttons&PS5_PAD_BUTTON_L2)||source.analogButtons.l2>32,protocol_,now,sendHid);
+  auto axis=[](unsigned v){const int n=int(v)-128;return n>-16&&n<16?0.f:float(n>0?n-16:n+16)/111.f;};
+  const float speed=mouseSpeed_==0?250.f:mouseSpeed_==1?700.f:1400.f;
+  mouseX_+=axis(source.rightStick.x)*speed*elapsed/1000000.f;mouseY_+=axis(source.rightStick.y)*speed*elapsed/1000000.f;
+  const int x=int(mouseX_),y=int(mouseY_);
+  if((x||y)&&sendInput(hid::motion(x,y,false,protocol_,now))){mouseX_-=x;mouseY_-=y;}
+  // Bound accumulated movement if the channel is congested.
+  mouseX_=std::max(-100.f,std::min(100.f,mouseX_));mouseY_=std::max(-100.f,std::min(100.f,mouseY_));
+  if(now>=nextWheel_) {
+   const int vertical=((source.buttons&PS5_PAD_BUTTON_UP)?120:0)-((source.buttons&PS5_PAD_BUTTON_DOWN)?120:0);
+   const int horizontal=((source.buttons&PS5_PAD_BUTTON_RIGHT)?120:0)-((source.buttons&PS5_PAD_BUTTON_LEFT)?120:0);
+   if((vertical||horizontal)&&sendInput(hid::motion(horizontal,vertical,true,protocol_,now)))nextWheel_=now+150000;
+  }
+ }
+ PS5_PadData pad=source;
+ if(virtualMode_||!flushed){pad={};}
+ // Local stream-exit gesture is never forwarded as a gamepad action.
+ pad.buttons&=~PS5_PAD_BUTTON_TOUCH_PAD;
+ if(source.buttons&PS5_PAD_BUTTON_TOUCH_PAD)pad.buttons&=~PS5_PAD_BUTTON_OPTIONS;
  std::uint16_t buttons=0;const unsigned ps[]={PS5_PAD_BUTTON_UP,PS5_PAD_BUTTON_DOWN,PS5_PAD_BUTTON_LEFT,PS5_PAD_BUTTON_RIGHT,PS5_PAD_BUTTON_OPTIONS,PS5_PAD_BUTTON_TOUCH_PAD,PS5_PAD_BUTTON_L3,PS5_PAD_BUTTON_R3,PS5_PAD_BUTTON_L1,PS5_PAD_BUTTON_R1,PS5_PAD_BUTTON_CROSS,PS5_PAD_BUTTON_CIRCLE,PS5_PAD_BUTTON_SQUARE,PS5_PAD_BUTTON_TRIANGLE};const unsigned xb[]={1,2,4,8,16,32,64,128,256,512,4096,8192,16384,32768};for(unsigned i=0;i<14;++i)if(pad.connected&&(pad.buttons&ps[i]))buttons|=xb[i];
  auto axis=[&](unsigned v,bool flip){if(!pad.connected)return 0;int n=(static_cast<int>(v)-128)*256;if(n>-3000&&n<3000)n=0;return flip?-std::max(-32767,n):n;};
  std::vector<std::uint8_t> data;le(data,12,4);le(data,26,2);le(data,0,2);le(data,1,2);le(data,20,2);le(data,buttons,2);le(data,pad.connected?(pad.analogButtons.l2|(pad.analogButtons.r2<<8)):0,2);le(data,axis(pad.leftStick.x,false),2);le(data,axis(pad.leftStick.y,true),2);le(data,axis(pad.rightStick.x,false),2);le(data,axis(pad.rightStick.y,true),2);le(data,0,2);le(data,85,2);le(data,0,2);le(data,now,8);

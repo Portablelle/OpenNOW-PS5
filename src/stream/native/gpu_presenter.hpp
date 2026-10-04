@@ -11,6 +11,7 @@ void shutdown() noexcept;
 bool profileAvailable(StreamProfile) noexcept;
 StreamProfile bestProfile() noexcept;
 bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept;
+void drawOverlay(const std::uint32_t*) noexcept;
 void drawInterface(const std::uint32_t*) noexcept;
 bool swap() noexcept;
 bool takeVideoDrawn() noexcept;
