@@ -54,6 +54,8 @@ struct PeerConnection {
   RtpDecoder artp_decoder;
 
   uint32_t remote_assrc;
+  int audio_payload;
+  int audio_red_payload;
   uint32_t remote_vssrc;
   uint16_t video_last_nack_expected;
   uint32_t video_last_nack_ms;
@@ -464,6 +466,13 @@ void* peer_connection_get_sctp(PeerConnection* pc) {
   return &pc->sctp;
 }
 
+void peer_connection_set_audio_payload_types(PeerConnection* pc, int opus, int red) {
+  if (!pc || opus < 0 || opus > 127 || red < -1 || red > 127 || opus == red)
+    return;
+  pc->audio_payload = opus;
+  pc->audio_red_payload = red;
+}
+
 PeerConnection* peer_connection_create(PeerConfiguration* config) {
   PeerConnection* pc = calloc(1, sizeof(PeerConnection));
   if (!pc) {
@@ -471,6 +480,8 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
   }
 
   memcpy(&pc->config, config, sizeof(PeerConfiguration));
+  pc->audio_payload = PT_OPUS;
+  pc->audio_red_payload = 63;
   pc->state = PEER_CONNECTION_NEW;
 
   agent_create(&pc->agent);
@@ -814,8 +825,8 @@ int peer_connection_loop(PeerConnection* pc) {
           pc->payload_counts[payload_type]++;
           const int is_audio_payload = payload_type == PT_PCMU ||
                                        payload_type == PT_PCMA ||
-                                       payload_type == PT_OPUS ||
-                                       payload_type == 63;
+                                       payload_type == pc->audio_payload ||
+                                       (int)payload_type == pc->audio_red_payload;
           if (ssrc == pc->remote_assrc || (pc->remote_assrc == 0 && is_audio_payload)) {
             if (pc->remote_assrc == 0) {
               pc->remote_assrc = ssrc;
@@ -828,8 +839,8 @@ int peer_connection_loop(PeerConnection* pc) {
                      (pc->remote_vssrc == 0 &&
                       payload_type != PT_PCMU &&
                       payload_type != PT_PCMA &&
-                      payload_type != PT_OPUS &&
-                      payload_type != 63)) {
+                      payload_type != pc->audio_payload &&
+                      (int)payload_type != pc->audio_red_payload)) {
             if (pc->remote_vssrc == 0) {
               pc->remote_vssrc = ssrc;
               LOGI("Learned remote video SSRC from RTP: %" PRIu32, pc->remote_vssrc);

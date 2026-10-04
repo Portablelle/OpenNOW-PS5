@@ -29,6 +29,8 @@ build/host-tests/websocket-queue-test
 
 ${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/audio_rtp_utils_test.cpp -o build/host-tests/audio-rtp-test
 build/host-tests/audio-rtp-test
+${CXX:-c++} -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/audio_playout_test.cpp src/stream/sdp.cpp src/stream/nvst_sdp.cpp -o build/host-tests/audio-playout-test
+build/host-tests/audio-playout-test
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ivendor/libpeer/src tests/rtp_layout_test.c -o build/host-tests/rtp-layout-test
 build/host-tests/rtp-layout-test
 for test in rtp_h264_assembly_test rtp_hevc_assembly_test rtp_reorder_test; do

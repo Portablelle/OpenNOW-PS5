@@ -12,6 +12,7 @@ struct StreamSettings {
  std::string image_quality_mode="Original";
  VideoCodec codec=VideoCodec::h264;
  bool hardware=false,hdr=false;
+ unsigned audio_channels=2;
 };
 inline StreamSettings settingsFor(StreamProfile profile) {
  switch(profile) {

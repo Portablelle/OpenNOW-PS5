@@ -85,7 +85,7 @@ void queryOutput(video::NativeQualification& q){
  if(rr==0){q.output_width=r.width;q.output_height=r.height;q.output_refresh_hz=hz;refresh=hz;}
  q.hdr_output=ro==0&&(o.range==2||(o.flags&1));
  char note[256];std::snprintf(note,sizeof(note),"GPU output handle=%d resolutionRC=%x %ux%u refreshCode=%llu outputRC=%x range=%u flags=%llu",handle,rr,r.width,r.height,(unsigned long long)r.rate,ro,o.range,(unsigned long long)o.flags);opennow_media_note(note);
- std::snprintf(label,sizeof(label),"OUTPUT %ux%u / %u HZ / %s / STEREO",q.output_width,q.output_height,hz,q.hdr_output?"HDR":"SDR");
+ std::snprintf(label,sizeof(label),"OUTPUT %ux%u / %u HZ / %s",q.output_width,q.output_height,hz,q.hdr_output?"HDR":"SDR");
 }
 void qualifyPipeline(const video::NativeMode& mode,const std::vector<std::uint8_t>& data,
                      std::size_t bytes,const video::SurfaceFingerprint& baseline){
@@ -241,6 +241,6 @@ bool drawVideo(const video::NativeSurface&,const video::NativeMode&) noexcept{re
 void drawOverlay(const std::uint32_t*) noexcept{}
 void drawInterface(const std::uint32_t*) noexcept{}bool swap() noexcept{return false;}
 bool takeVideoDrawn() noexcept{return false;}
-const char* outputLabel() noexcept{return "1080P SDR / STEREO";}
+const char* outputLabel() noexcept{return "1080P SDR";}
 }
 #endif

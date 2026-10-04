@@ -70,5 +70,12 @@ int main() {
     assert(!ParseRedPrimary(wrong_codec,sizeof(wrong_codec),63).data);
     const uint8_t wrong_primary[]={110,0x11};
     assert(!ParseRedPrimary(wrong_primary,sizeof(wrong_primary),63).data);
+    const uint8_t dynamic_red[]={0x80|112,0x07,0x80,0x02,112,0xaa,0xbb,0x11,0x22};
+    const auto dynamic=ParseRedPrimary(dynamic_red,sizeof(dynamic_red),64,112,64);
+    assert(dynamic.red&&dynamic.size==2&&dynamic.data[0]==0x11);
+    const auto dynamic_recovery=ParseLatestRedundant(dynamic_red,sizeof(dynamic_red),112);
+    assert(dynamic_recovery.data&&dynamic_recovery.size==2&&dynamic_recovery.timestamp_offset==480);
+    assert(!ParseRedPrimary(dynamic_red,sizeof(dynamic_red),64,111,64).data);
+    assert(!ParseLatestRedundant(dynamic_red,sizeof(dynamic_red),111).data);
     return 0;
 }

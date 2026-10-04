@@ -5,6 +5,7 @@
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
+#include "stream/audio_format.hpp"
 #include "catalog_search.hpp"
 #include "virtual_keyboard.hpp"
 #include "stream/native/gpu_presenter.hpp"
@@ -42,6 +43,7 @@ opennow::Media media;
 #endif
 bool publishedStream=false;
 opennow::StreamProfile publishedProfile=opennow::StreamProfile::quality;
+opennow::audio::Mode publishedAudio=opennow::audio::Mode::automatic;
 pthread_mutex_t viewMutex=PTHREAD_MUTEX_INITIALIZER;
 std::atomic_int command{0};
 opennow::Http* activeHttp=nullptr; // Set before UI loop; lifetime is the process.
@@ -90,6 +92,12 @@ void* worker(void*) {
 #else
     auto profile=opennow::StreamProfile::quality;
 #endif
+    auto audioMode=opennow::audio::Mode::automatic;
+#ifndef OPENNOW_HOST_PREVIEW
+    const auto audioCapacity=opennow::Media::availableAudioChannels();
+#else
+    const unsigned audioCapacity=2;
+#endif
     for (;;) {
         const int action=command.exchange(0);
         if(action==10||action==11) {
@@ -129,6 +137,7 @@ void* worker(void*) {
             if(action==9&&cloud.view().state==opennow::CloudState::catalog) {
                 do {profile=opennow::nextProfile(profile);} while(opennow::settingsFor(profile).hardware&&!opennow::gpu::profileAvailable(profile));
             }
+            if(action==12&&cloud.view().state==opennow::CloudState::catalog)audioMode=opennow::audio::nextMode(audioMode);
             if(action==3)cloud.select(-1);
             if(action==4)cloud.select(1);
             if(action==5){
@@ -138,7 +147,7 @@ void* worker(void*) {
                     if(std::fscanf(config,"%d %c",&age,&trailing)!=1)age=-1;
                     std::fclose(config);
                 }
-                cloud.launch(login.cloudToken(),id,now/1000000,age,profile);streamAttempted=false;
+                cloud.launch(login.cloudToken(),id,now/1000000,age,profile,opennow::audio::requestedChannels(audioMode,audioCapacity));streamAttempted=false;
             }
             if(action==6)cloud.load(login.cloudToken(),id,"",false);
             if(action==7&&cloud.view().hasNext)cloud.load(login.cloudToken(),id,"",true);
@@ -164,7 +173,7 @@ void* worker(void*) {
             }
 #endif
         }
-        pthread_mutex_lock(&viewMutex);publishedCloud=cloud.view();publishedProfile=profile;
+        pthread_mutex_lock(&viewMutex);publishedCloud=cloud.view();publishedProfile=profile;publishedAudio=audioMode;
 #ifndef OPENNOW_HOST_PREVIEW
         publishedStream=stream.active();
         if(streamAttempted)std::snprintf(publishedCloud.message,sizeof(publishedCloud.message),"%s",stream.status());
@@ -235,8 +244,8 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     if (pad>=0 && scePadReadState(pad,&data)==0 && data.connected) {
         pressed=data.buttons & ~lastButtons; lastButtons=data.buttons;
     } else lastButtons=0;
-    opennow::View v;opennow::CloudView cv;bool streaming=false;opennow::StreamProfile profile;
-    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;streaming=publishedStream;profile=publishedProfile;pthread_mutex_unlock(&viewMutex);
+    opennow::View v;opennow::CloudView cv;bool streaming=false;opennow::StreamProfile profile;opennow::audio::Mode audioMode;
+    pthread_mutex_lock(&viewMutex);v=published;cv=publishedCloud;streaming=publishedStream;profile=publishedProfile;audioMode=publishedAudio;pthread_mutex_unlock(&viewMutex);
     const bool exitStream=streaming&&(data.buttons&PS5_PAD_BUTTON_OPTIONS)&&(pressed&PS5_PAD_BUTTON_TOUCH_PAD);
     pthread_mutex_lock(&viewMutex);
     if(!streaming||!data.connected||exitStream) {
@@ -312,6 +321,7 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     } else if (!streaming && (pressed&PS5_PAD_BUTTON_CROSS) && v.state!=State::waiting && v.state!=State::requesting && v.state!=State::authenticated) command.store(1);
     if(v.state==State::authenticated&&!streaming) {
         if(cv.state==opennow::CloudState::catalog&&(pressed&PS5_PAD_BUTTON_L1))command.store(9);
+        if(cv.state==opennow::CloudState::catalog&&(pressed&PS5_PAD_BUTTON_R2))command.store(12);
         if(pressed&PS5_PAD_BUTTON_UP)command.store(3);
         if(pressed&PS5_PAD_BUTTON_DOWN)command.store(4);
         if(pressed&PS5_PAD_BUTTON_CROSS)command.store(5);
@@ -330,9 +340,10 @@ bool draw(ps5::demo::Canvas& c) noexcept {
     static opennow::CloudView previousCloud;
     static opennow::View previous;
     static auto previousProfile=opennow::StreamProfile::quality;
+    static auto previousAudio=opennow::audio::Mode::automatic;
     static bool first=true;
-    if (!first && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile) return false;
-    first=false; previous=v;previousCloud=cv;previousProfile=profile;
+    if (!first && !searchChanged && !searchInput.open && std::memcmp(&previous,&v,sizeof(v))==0&&std::memcmp(&previousCloud,&cv,sizeof(cv))==0&&previousProfile==profile&&previousAudio==audioMode) return false;
+    first=false; previous=v;previousCloud=cv;previousProfile=profile;previousAudio=audioMode;
     const auto bg=static_cast<Color>(0xff1c1610), green=static_cast<Color>(0xff9ee656);
     const auto control=[&](unsigned x,unsigned y,Canvas::Button button,std::string_view label,Color color){
         c.button(x,y,button,48,color);
@@ -407,6 +418,8 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         if(cv.hasNext)control(1240,850,Canvas::Button::r1,"NEXT PAGE",Color::white);
         control(100,915,Canvas::Button::l1,"PROFILE",green);
         c.text(330,929,opennow::profileLabel(profile),3,green);
+        char audioLabel[32];std::snprintf(audioLabel,sizeof(audioLabel),"AUDIO %s",opennow::audio::modeLabel(audioMode));
+        control(1370,915,Canvas::Button::r2,audioLabel,green);
         control(100,980,Canvas::Button::circle,"CLOSE APP",green);
         signOut(480,980);
         c.text(1000,994,v.sessionSaved?"ACCOUNT SAVED":"ACCOUNT NOT SAVED",3,green);
@@ -416,9 +429,9 @@ bool draw(ps5::demo::Canvas& c) noexcept {
         c.text(100,994,"UNOFFICIAL CLIENT",3,green);
     }
 #ifndef OPENNOW_HOST_PREVIEW
-    c.text(v.state==State::authenticated?1000:100,929,opennow::gpu::outputLabel(),3,green);
+    c.text(v.state==State::authenticated?330:100,v.state==State::authenticated?955:929,opennow::gpu::outputLabel(),3,green);
 #else
-    c.text(v.state==State::authenticated?1000:100,929,"OUTPUT 3840x2160 / 120 HZ / HDR / STEREO",3,green);
+    c.text(v.state==State::authenticated?330:100,v.state==State::authenticated?955:929,"OUTPUT 3840x2160 / 120 HZ / HDR",3,green);
 #endif
     if(searchInput.open) {
         c.rectangle(80,300,1760,665,bg);

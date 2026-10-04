@@ -32,7 +32,7 @@ void be(std::vector<std::uint8_t>& b,std::uint64_t n,unsigned bytes){while(bytes
 }
 bool Stream::start(const Session& s,const char* device) {
  qos_={};nextQos_=0;qosRequested_=false;
- stop();opennow_media_note("START 00.002.026");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
+ stop();opennow_media_note("START 00.002.037");entropyFailed=false;session_=s;settings_=settingsFor(s.profile);settings_.audio_channels=s.audioChannels;name_=std::string("opennow-")+device;peerId_=remoteId_=ack_=0;answerSent_=inputReady_=false;nextHeartbeat_=started_=lastInput_=0;inputAttempts_=0;inputOpened_=keyframeRequested_=0;candidates_.clear();lastVideoLoss_=0;
  capture_.arm("/data/opennow",settings_.codec==VideoCodec::hevc,sceKernelGetProcessTime());
  if(std::strncmp(s.signaling,"wss://",6)){std::snprintf(status_,sizeof(status_),"Invalid secure signaling endpoint");return false;}
  if(!media_.start(settings_)){std::snprintf(status_,sizeof(status_),"Could not initialize video decoder / audio output");return false;}
@@ -71,6 +71,12 @@ void Stream::message(const std::string& message) {
   if(!std::strcmp(text(data,"type"),"offer")){
    std::string offer=sdp::PrepareGfnOfferSdp(text(data,"sdp"),session_.signaling,session_.mediaIp,session_.mediaPort);
    if(offer.size()<60000&&!offer.empty()){
+    const auto audioFormat=audio::selectFormat(offer,std::min(settings_.audio_channels,media_.audioCapacity()));
+    if(!audioFormat.channels||!media_.configureAudio(audioFormat)){
+     std::snprintf(status_,sizeof(status_),"Server offered no supported audio format");return;
+    }
+    settings_.audio_channels=audioFormat.channels;
+    peer_connection_set_audio_payload_types(pc_,audioFormat.payload,audioFormat.redPayload);
     mediaSdp("OFFER",offer);peer_connection_set_remote_description(pc_,offer.c_str(),SDP_TYPE_OFFER);
     const char* raw=peer_connection_create_answer(pc_);
     if(raw&&!entropyFailed){auto answer=sdp::AdaptAnswerSdpToOffer(raw,offer,settings_);if(answer.empty()){std::snprintf(status_,sizeof(status_),"Server did not offer the selected video codec");return;}mediaSdp("ANSWER",answer);auto nvst=webrtc::BuildNvstSdp(answer,settings_,sdp::ParseRiInputCapabilities(offer));auto* a=cJSON_CreateObject();cJSON_AddStringToObject(a,"type","answer");cJSON_AddStringToObject(a,"sdp",answer.c_str());cJSON_AddStringToObject(a,"nvstSdp",nvst.c_str());payload(a);cJSON_Delete(a);answerSent_=true;
@@ -133,19 +139,25 @@ for(unsigned i=0;i<64;++i)if(!peer_connection_loop(pc_))break;
    std::snprintf(diagnostic,sizeof(diagnostic),"ASSEMBLER ready=%d lastResult=%d",stats.assembler_ready,stats.last_video_result);opennow_media_note(diagnostic);
    std::snprintf(diagnostic,sizeof(diagnostic),"AUDIO recovered=%u concealed=%u underruns=%u / TARGET %dx%d %d FPS %d kbps",
     media_.audioRecovered.load(),media_.audioConcealed.load(),media_.audioUnderruns.load(),settings_.width,settings_.height,settings_.fps,settings_.bitrate_kbps);opennow_media_note(diagnostic);
+   const auto samples=media_.audioSamples.load();const auto bytes=media_.audioBytes.load();
+   std::snprintf(diagnostic,sizeof(diagnostic),"AUDIO format=%uch requested=%uch rate=48000 codec_kbps=%.1f queue_ms=%.1f peak_ms=%.1f dropped_frames=%u output_errors=%u fec_attempts=%u",
+    media_.audioChannels.load(),session_.audioChannels,samples?static_cast<double>(bytes)*8*48000/samples/1000:0.0,
+    media_.audioQueueFrames.load()/48.0,media_.audioQueuePeak.load()/48.0,media_.audioDroppedFrames.load(),media_.audioOutputErrors.load(),media_.audioFecAttempts.load());opennow_media_note(diagnostic);
    std::string types="PT";for(unsigned pt=0;pt<128;++pt)if(stats.payload_counts[pt]){char item[32];std::snprintf(item,sizeof(item)," %u=%u",pt,stats.payload_counts[pt]);types+=item;}opennow_media_note(types.c_str());
-   std::snprintf(status_,sizeof(status_),"VIDEO RTP %u AU %u LOST %u / DECODE %u ERR %d / AUDIO %u ERR %u",
-    stats.packets_received,stats.access_units_completed,stats.access_units_dropped,media_.frames.load(),media_.decodeError.load(),media_.audioPackets.load(),media_.audioErrors.load());
+   std::snprintf(status_,sizeof(status_),"VIDEO RTP %u AU %u LOST %u / DECODE %u ERR %d / AUDIO %uch %u ERR %u",
+    stats.packets_received,stats.access_units_completed,stats.access_units_dropped,media_.frames.load(),media_.decodeError.load(),media_.audioChannels.load(),media_.audioPackets.load(),media_.audioErrors.load());
    // Replace a small private snapshot, so late symptoms remain observable after
    // the bounded startup media log has filled. No session/network secrets.
    if(auto* live=std::fopen("/data/opennow/live-video.status","wb")){
-    std::fprintf(live,"version=00.002.026 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
+    std::fprintf(live,"version=00.002.037 elapsed_us=%llu width=%d height=%d bytes=%u decoded=%u presented=%u error=%d hdr=%d lost=%u gaps=%u queue_lost=%u resets=%u qos_open=%d qos_queued=%u capture_bytes=%zu capture_done=%d\n",
      static_cast<unsigned long long>(now-started_),media_.decodedWidth.load(),media_.decodedHeight.load(),media_.videoBytes.load(),media_.frames.load(),media_.presented.load(),media_.decodeError.load(),media_.actualHdr.load(),stats.access_units_dropped,stats.sequence_gaps,media_.queueDrops.load(),media_.recoveryResets.load(),peer_connection_datachannel_is_open(pc_,6),qos_.queuedCount(),capture_.bytes(),capture_.done());
     std::fprintf(live,"au_received=%u queue_depth=%u queue_peak=%u queue_max_us=%llu decode_calls=%u decode_us=%llu decode_max_us=%llu gpu_calls=%u gpu_us=%llu gpu_max_us=%llu\n",
      stats.access_units_completed,media_.queueDepth.load(),media_.queuePeak.load(),static_cast<unsigned long long>(media_.queueMaxUs.load()),media_.decodeCalls.load(),static_cast<unsigned long long>(media_.decodeUs.load()),static_cast<unsigned long long>(media_.decodeMaxUs.load()),media_.gpuCalls.load(),static_cast<unsigned long long>(media_.gpuUs.load()),static_cast<unsigned long long>(media_.gpuMaxUs.load()));
     const auto t=media_.nativeTiming();
     std::fprintf(live,"target_fps=%d target_hdr=%d codec=%d native_copy_us=%llu native_publish_us=%llu native_decode_us=%llu native_flush_us=%llu native_decode_calls=%llu native_flush_calls=%llu native_blocked_attempts=%llu native_worker_mask=%llu native_pipeline_depth=%u native_inflight=%u\n",
      settings_.fps,settings_.hdr,static_cast<int>(settings_.codec),static_cast<unsigned long long>(t.copy_us),static_cast<unsigned long long>(t.publish_us),static_cast<unsigned long long>(t.decode_us),static_cast<unsigned long long>(t.flush_us),static_cast<unsigned long long>(t.decode_calls),static_cast<unsigned long long>(t.flush_calls),static_cast<unsigned long long>(t.blocked_attempts),static_cast<unsigned long long>(t.worker_mask),t.pipeline_depth,t.in_flight);
+    std::fprintf(live,"audio_requested_channels=%u audio_channels=%u audio_bytes=%u audio_samples=%u audio_queue_frames=%u audio_queue_peak=%u audio_dropped_frames=%u audio_output_errors=%u audio_recovered=%u audio_concealed=%u audio_underruns=%u audio_fec_attempts=%u\n",
+     session_.audioChannels,media_.audioChannels.load(),bytes,samples,media_.audioQueueFrames.load(),media_.audioQueuePeak.load(),media_.audioDroppedFrames.load(),media_.audioOutputErrors.load(),media_.audioRecovered.load(),media_.audioConcealed.load(),media_.audioUnderruns.load(),media_.audioFecAttempts.load());
     std::fclose(live);
    }
    if(!media_.frames&&now-keyframeRequested_>=2000000){peer_connection_request_video_keyframe(pc_);keyframeRequested_=now;}

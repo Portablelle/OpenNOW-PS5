@@ -17,7 +17,7 @@ struct RedundantPayload {
     uint16_t timestamp_offset = 0;
 };
 
-inline RedundantPayload ParseLatestRedundant(const uint8_t* data, size_t size) {
+inline RedundantPayload ParseLatestRedundant(const uint8_t* data, size_t size, uint8_t primary_type = 111) {
     if (!data || size < 5 || (data[0] & 0x80) == 0)
         return {};
     size_t header = 0;
@@ -25,7 +25,7 @@ inline RedundantPayload ParseLatestRedundant(const uint8_t* data, size_t size) {
     size_t length = 0;
     uint16_t timestamp_offset = 0;
     while (header < size && (data[header] & 0x80) != 0) {
-        if (header + 4 > size || (data[header] & 0x7f) != 111)
+        if (header + 4 > size || (data[header] & 0x7f) != primary_type)
             return {};
         length = size_t(((data[header + 2] & 0x03) << 8) | data[header + 3]);
         redundant_bytes += length;
@@ -35,7 +35,7 @@ inline RedundantPayload ParseLatestRedundant(const uint8_t* data, size_t size) {
             uint16_t((uint16_t(data[header + 1]) << 6) | (data[header + 2] >> 2));
         header += 4;
     }
-    if (header >= size || (data[header] & 0x7f) != 111)
+    if (header >= size || (data[header] & 0x7f) != primary_type)
         return {};
     ++header;
     if (redundant_bytes >= size - header)
@@ -43,21 +43,21 @@ inline RedundantPayload ParseLatestRedundant(const uint8_t* data, size_t size) {
     return {data + header + redundant_bytes - length, length, timestamp_offset};
 }
 
-inline ParsedPayload ParseRedPrimary(const uint8_t* data, size_t size, uint8_t payload_type) {
+inline ParsedPayload ParseRedPrimary(const uint8_t* data, size_t size, uint8_t payload_type, uint8_t primary_type = 111, int red_type = 63) {
     if (!data || size == 0)
         return {};
-    if (payload_type != 63)
+    if (payload_type != red_type)
         return {data, size, false};
 
     size_t header = 0;
     size_t redundant_bytes = 0;
     while (header < size && (data[header] & 0x80) != 0) {
-        if (header + 4 > size || (data[header] & 0x7f) != 111)
+        if (header + 4 > size || (data[header] & 0x7f) != primary_type)
             return {};
         redundant_bytes += size_t(((data[header + 2] & 0x03) << 8) | data[header + 3]);
         header += 4;
     }
-    if (header >= size || (data[header] & 0x7f) != 111)
+    if (header >= size || (data[header] & 0x7f) != primary_type)
         return {};
     ++header;
     if (header + redundant_bytes >= size)

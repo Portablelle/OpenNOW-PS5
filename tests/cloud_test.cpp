@@ -92,6 +92,21 @@ int main(){
   cJSON_Delete(root);
   assert(c.session().profile==profile);c.stop("fixture-jwt","fixture-device");
  }
+ for(unsigned channels:{6u,8u,99u}) {
+  c.launch("fixture-jwt","fixture-device",60,27,StreamProfile::quality,channels);
+  const unsigned expected=channels==99?2:channels;
+  auto* root=cJSON_Parse(m.body.c_str());assert(root);
+  auto* request=cJSON_GetObjectItemCaseSensitive(root,"sessionRequestData");
+  auto* features=cJSON_GetObjectItemCaseSensitive(request,"requestedStreamingFeatures");
+  assert(cJSON_GetObjectItemCaseSensitive(features,"audioChannelCount")->valueint==int(expected));
+  assert(cJSON_GetObjectItemCaseSensitive(request,"requestedAudioFormat")->valueint==(expected==8?3:expected==6?2:1));
+  assert(c.session().audioChannels==expected);
+  auto* metadata=cJSON_GetObjectItemCaseSensitive(request,"metaData");
+  auto* surround=cJSON_GetArrayItem(metadata,3);
+  assert(!std::strcmp(cJSON_GetObjectItemCaseSensitive(surround,"key")->valuestring,"surroundAudioInfo"));
+  assert(std::atoi(cJSON_GetObjectItemCaseSensitive(surround,"value")->valuestring)==int(expected));
+  cJSON_Delete(root);assert(c.stop("fixture-jwt","fixture-device"));
+ }
  m.reject=true;c.launch("fixture-jwt","fixture-device",20,27);assert(c.view().state==CloudState::failed);assert(std::strstr(c.view().message,"INTERNAL_ERROR_STATUS"));assert(std::strstr(c.view().message,"unified 123"));
  puts("Catalog and cloud lifecycle regressions passed");
 }

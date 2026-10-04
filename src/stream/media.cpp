@@ -15,6 +15,7 @@ extern "C" {
 #include <libavutil/log.h>
 #include <libswscale/swscale.h>
 #include <opus/opus.h>
+#include <opus/opus_multistream.h>
 // FFmpeg 7.0 FFCodec starts with its public AVCodec, pinned by PacBrew.
 extern const AVCodec ff_h264_decoder;
 int scePthreadCreate(void**,const void*,void*(*)(void*),void*,const char*);
@@ -34,8 +35,31 @@ void decoderLog(void*,int level,const char* format,va_list args){
 }
 }
 
+unsigned Media::availableAudioChannels() noexcept {
+ const int init=sceAudioOutInit();
+ if(init!=0&&static_cast<unsigned>(init)!=0x8026000e)return 2;
+ const int handle=sceAudioOutOpen(0xff,0,0,256,48000,2);
+ if(handle<0)return 2;
+ return sceAudioOutClose(handle)>=0?8:2;
+}
+bool Media::configureAudio(const audio::Format& format) noexcept {
+ // Called on the receive thread before sending the SDP answer / accepting RTP.
+ if(!format.channels||format.channels>outputChannels_)return false;
+ int error=0;
+ auto* decoder=opus_multistream_decoder_create(48000,format.channels,format.streams,
+     format.coupled,format.mapping.data(),&error);
+ if(!decoder||error){if(decoder)opus_multistream_decoder_destroy(decoder);return false;}
+ if(opus_)opus_multistream_decoder_destroy(opus_);
+ opus_=decoder;audioFormat_=format;audioChannels=format.channels;sequenceSeen_=false;stereoProbePackets_=0;
+ pthread_mutex_lock(&lock_);audioQueue_.clear();pthread_mutex_unlock(&lock_);
+ char note[192];std::snprintf(note,sizeof(note),"AUDIO negotiated=%uch requested=%uch output=%uch streams=%u coupled=%u PT=%d RED=%d ceiling=%u",
+     format.channels,settings_.audio_channels,outputChannels_,format.streams,format.coupled,
+     format.payload,format.redPayload,format.bitrate());opennow_media_note(note);
+ return true;
+}
+
 bool Media::start(const StreamSettings& settings) noexcept {
- stop();settings_=settings;presented=0;actualHdr=false;frames=0;dropped=0;videoUnits=0;audioPackets=0;audioErrors=0;audioRecovered=0;audioConcealed=0;audioUnderruns=0;expectedAudioTimestamp_=0;decodeError=0;read_=used_=0;fresh_=sequenceSeen_=false;recovery_.reset();queueDrops=0;corruptFrames=0;recoveryResets=0;idrFrames=0;decodedWidth=0;decodedHeight=0;videoBytes=0;
+ stop();settings_=settings;presented=0;actualHdr=false;frames=0;dropped=0;videoUnits=0;audioPackets=0;audioErrors=0;audioRecovered=0;audioConcealed=0;audioUnderruns=0;expectedAudioTimestamp_=0;decodeError=0;audioQueue_.clear();fresh_=sequenceSeen_=false;recovery_.reset();queueDrops=0;corruptFrames=0;recoveryResets=0;idrFrames=0;decodedWidth=0;decodedHeight=0;videoBytes=0;
  queueDepth=0;queuePeak=0;decodeCalls=0;gpuCalls=0;decodeUs=0;decodeMaxUs=0;queueMaxUs=0;gpuUs=0;gpuMaxUs=0;
  if(settings_.hardware){
 #ifdef OPENNOW_GPU
@@ -53,11 +77,16 @@ bool Media::start(const StreamSettings& settings) noexcept {
  codec_->thread_count=3;codec_->thread_type=FF_THREAD_SLICE;codec_->flags|=AV_CODEC_FLAG_LOW_DELAY;
  if(avcodec_open2(codec_,decoder,nullptr)<0){stop();return false;}
  }
- int error=0;opus_=opus_decoder_create(48000,2,&error);
+ audioChannels=0;audioBytes=0;audioSamples=0;audioQueueFrames=0;audioQueuePeak=0;audioDroppedFrames=0;audioOutputErrors=0;audioFecAttempts=0;
  if(!settings_.hardware)pixels_=static_cast<std::uint32_t*>(std::calloc(1920*1080,4));
  const bool queueReady=compressed_.open(settings_.hardware?8:2,cap,AV_INPUT_BUFFER_PADDING_SIZE);
- if(error||!opus_||(!settings_.hardware&&!pixels_)||!queueReady){stop();return false;}
- sceAudioOutInit();audioHandle_=sceAudioOutOpen(0xff,0,0,256,48000,1);
+ if((!settings_.hardware&&!pixels_)||!queueReady){stop();return false;}
+ const int init=sceAudioOutInit();
+ if(init!=0&&static_cast<unsigned>(init)!=0x8026000e){stop();return false;}
+ outputChannels_=settings_.audio_channels>2?8:2;
+ audioHandle_=sceAudioOutOpen(0xff,0,0,256,48000,outputChannels_==8?2:1);
+ if(audioHandle_<0&&outputChannels_==8){outputChannels_=2;audioHandle_=sceAudioOutOpen(0xff,0,0,256,48000,1);}
+ audioQueue_.open(outputChannels_);
  if(audioHandle_<0){stop();return false;}
  running_=true;
  if(scePthreadCreate(&videoThread_,nullptr,decode,this,"opennow-video")||scePthreadCreate(&audioThread_,nullptr,output,this,"opennow-audio")){stop();return false;}
@@ -73,7 +102,7 @@ void Media::stop() noexcept {
  nativeDecoder_.close();
  #endif
  avcodec_free_context(&codec_);if(scaler_){sws_freeContext(scaler_);scaler_=nullptr;}
- if(opus_){opus_decoder_destroy(opus_);opus_=nullptr;}
+ if(opus_){opus_multistream_decoder_destroy(opus_);opus_=nullptr;}
  compressed_.close();
  pthread_mutex_lock(&lock_);std::free(pixels_);pixels_=nullptr;fresh_=false;pthread_mutex_unlock(&lock_);
 }
@@ -237,47 +266,73 @@ void* Media::decode(void* context) {
 }
 void Media::audio(const std::uint8_t* data,std::size_t size,std::uint16_t sequence,std::uint8_t payloadType,std::uint32_t timestamp) noexcept {
  ++audioPackets;
- if(payloadType!=111&&payloadType!=63){++audioErrors;return;}
- auto payload=audio::ParseRedPrimary(data,size,payloadType);
+ if(payloadType!=audioFormat_.payload&&payloadType!=audioFormat_.redPayload){++audioErrors;return;}
+ auto payload=audio::ParseRedPrimary(data,size,payloadType,audioFormat_.payload,audioFormat_.redPayload);
  if(!payload.data||!payload.size){++audioErrors;return;}
- if(!running_||!opus_||payload.size>4096)return;
+ if(!running_||!opus_||payload.size>16384)return;
  if(sequenceSeen_&&static_cast<std::int16_t>(sequence-lastSequence_)<=0)return;
  const int packetSamples=opus_packet_get_nb_samples(payload.data,payload.size,48000);
  if(packetSamples<=0||packetSamples>5760){++audioErrors;return;}
+ audioBytes+=static_cast<unsigned>(payload.size);
  auto enqueue=[this](const std::int16_t* pcm,unsigned count){
   pthread_mutex_lock(&lock_);
-  // Discard only the oldest excess samples; keep the newest continuous audio.
-  if(used_+count>audioFrames){unsigned excess=used_+count-audioFrames;read_=(read_+excess)%audioFrames;used_-=excess;}
-  for(unsigned i=0;i<count;++i){unsigned p=(read_+used_+i)%audioFrames;pcm_[p*2]=pcm[i*2];pcm_[p*2+1]=pcm[i*2+1];}
-  used_+=count;pthread_mutex_unlock(&lock_);
+  audioQueue_.push(pcm,count,audioFormat_.channels);
+  audioQueueFrames=audioQueue_.frames();audioQueuePeak=audioQueue_.peak();audioDroppedFrames=audioQueue_.dropped();
+  pthread_mutex_unlock(&lock_);
  };
- std::int16_t decoded[5760*2];
+ std::int16_t decoded[5760*8];
  if(sequenceSeen_&&timestamp!=expectedAudioTimestamp_){
   const int gap=audio::RecoverySamples(timestamp,expectedAudioTimestamp_);
   if(gap){
-   auto redundant=payloadType==63?audio::ParseLatestRedundant(data,size):audio::RedundantPayload{};
+   auto redundant=payloadType==audioFormat_.redPayload?audio::ParseLatestRedundant(data,size,audioFormat_.payload):audio::RedundantPayload{};
    int recovered=0;
    if(redundant.data&&redundant.timestamp_offset==gap&&
       opus_packet_get_nb_samples(redundant.data,redundant.size,48000)==gap){
-    recovered=opus_decode(opus_,redundant.data,redundant.size,decoded,gap,0);
+    recovered=opus_multistream_decode(opus_,redundant.data,redundant.size,decoded,gap,0);
     if(recovered>0)++audioRecovered;
    }
-   if(recovered<=0){recovered=opus_decode(opus_,nullptr,0,decoded,gap,0);if(recovered>0)++audioConcealed;}
+   if(recovered<=0){
+    // A single missing frame can use the next packet's in-band FEC. Opus
+    // supplies PLC itself when FEC is absent, so count attempts separately.
+    if(gap==packetSamples){++audioFecAttempts;recovered=opus_multistream_decode(opus_,payload.data,payload.size,decoded,gap,1);}
+    if(recovered<=0)recovered=opus_multistream_decode(opus_,nullptr,0,decoded,gap,0);
+    if(recovered>0)++audioConcealed;
+   }
    if(recovered>0)enqueue(decoded,recovered);
   }else{
-   opus_decoder_ctl(opus_,OPUS_RESET_STATE);
-   pthread_mutex_lock(&lock_);read_=used_=0;pthread_mutex_unlock(&lock_);
+   opus_multistream_decoder_ctl(opus_,OPUS_RESET_STATE);
+   pthread_mutex_lock(&lock_);audioQueue_.clear();pthread_mutex_unlock(&lock_);
   }
  }
- int n=opus_decode(opus_,payload.data,payload.size,decoded,5760,0);
+ int n=opus_multistream_decode(opus_,payload.data,payload.size,decoded,5760,0);
+ if(n<=0&&audioFormat_.channels>2&&audioSamples.load()==0){
+  // Some seats describe surround but send elementary stereo from the outset.
+  // Require eight consecutive decodable stereo packets before changing format;
+  // never downgrade an established surround stream on a damaged packet.
+  int error=0;auto* probe=opus_decoder_create(48000,2,&error);
+  const int stereoSamples=probe&&!error?opus_decode(probe,payload.data,payload.size,decoded,5760,0):0;
+  if(probe)opus_decoder_destroy(probe);
+  stereoProbePackets_=stereoSamples==packetSamples?stereoProbePackets_+1:0;
+  if(stereoProbePackets_>=8){
+   auto stereo=audioFormat_;stereo.channels=2;stereo.streams=stereo.coupled=1;stereo.mapping={0,1};
+   if(configureAudio(stereo)){
+    opennow_media_note("AUDIO startup fallback: server sent stereo instead of described surround");
+    n=opus_multistream_decode(opus_,payload.data,payload.size,decoded,5760,0);
+   }
+  }
+ }
  if(n<=0){++audioErrors;return;}
  sequenceSeen_=true;lastSequence_=sequence;expectedAudioTimestamp_=timestamp+static_cast<unsigned>(n);
- enqueue(decoded,n);
+ audioSamples+=static_cast<unsigned>(n);enqueue(decoded,n);
 }
 void* Media::output(void* context) {
- auto& self=*static_cast<Media*>(context);bool primed=false;alignas(64) std::int16_t block[256*2];
- while(self.running_){std::memset(block,0,sizeof(block));pthread_mutex_lock(&self.lock_);if(!primed&&self.used_>=1920)primed=true;
- unsigned n=primed?(self.used_<256?self.used_:256):0;if(primed&&n<256){primed=false;++self.audioUnderruns;}for(unsigned i=0;i<n;++i){unsigned p=(self.read_+i)%audioFrames;block[i*2]=self.pcm_[p*2];block[i*2+1]=self.pcm_[p*2+1];}self.read_=(self.read_+n)%audioFrames;self.used_-=n;pthread_mutex_unlock(&self.lock_);if(sceAudioOutOutput(self.audioHandle_,block)<0)sceKernelUsleep(5000);}
+ auto& self=*static_cast<Media*>(context);alignas(64) std::int16_t block[256*8];
+ while(self.running_){
+  pthread_mutex_lock(&self.lock_);self.audioQueue_.pop(block);
+  self.audioQueueFrames=self.audioQueue_.frames();self.audioUnderruns=self.audioQueue_.underruns();
+  pthread_mutex_unlock(&self.lock_);
+  if(sceAudioOutOutput(self.audioHandle_,block)<0){++self.audioOutputErrors;sceKernelUsleep(5000);}
+ }
  return nullptr;
 }
 bool Media::draw(ps5::demo::Canvas& c) noexcept {

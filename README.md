@@ -8,11 +8,11 @@
 
 *Social preview artwork for the independent native PS5 prototype.*
 
-An experimental native PS5 homebrew client for GeForce NOW, based on the public [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) projects. Native hardware video decoding, GPU presentation, stereo audio and DualSense input are integrated.
+An experimental native PS5 homebrew client for GeForce NOW, based on the public [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) projects. Native hardware video decoding, GPU presentation, Opus audio and DualSense input are integrated.
 
 **This is a working, console-tested prototype, not a finished application.** You can sign in, launch a game and play. The interface is still rough and primarily exists to test that authentication, streaming, audio, video and controls work together. Expect an incomplete user experience, limited navigation and functionality that still needs further testing.
 
-**Latest prerelease: [0.0.6](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.6)** — development build `00.002.036`, title ID `PPSA99082`, with a DualSense virtual mouse, a masked remote keyboard and PS5 control icons for launcher logins and menus. This project is unofficial and unaffiliated with Sony or NVIDIA.
+**Latest prerelease: [0.0.7](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.7)** — development build `00.002.037`, title ID `PPSA99082`, with Auto / Stereo / 5.1 / 7.1 audio selection, validated multichannel offer handling and adaptive audio buffering. This project is unofficial and unaffiliated with Sony or NVIDIA.
 
 ## What works
 
@@ -20,7 +20,7 @@ An experimental native PS5 homebrew client for GeForce NOW, based on the public 
 - Native H.264 and HEVC Main10 decoding, including 10-bit SDR and HDR10 presentation paths.
 - Qualified asynchronous Main10 decoding with owned input buffers and safe GPU surface leases.
 - Selectable 4K120, 4K90 and 4K60 HDR targets, 4K120/90 SDR targets, and lower-resolution compatibility profiles, with up to 100 Mb/s requested bitrate.
-- Full-screen GPU presentation, Opus stereo audio and DualSense controls.
+- Full-screen GPU presentation, 48 kHz Opus audio and DualSense controls.
 
 In the latest console test, a 3840 × 2160 Main10 SDR stream was received, decoded and drawn at approximately **92 FPS and 51–52 Mb/s**. No RTP/AU loss, queue overflow, decoder reset or API error was recorded after more than 19 minutes. The tester reported fluid motion and the earlier recurring compression degradation was resolved.
 
@@ -30,13 +30,13 @@ In the latest console test, a 3840 × 2160 Main10 SDR stream was received, decod
 - **Real 120 FPS and HDR game streaming are not yet validated.** The tested game supplied SDR despite an HDR request. Startup fixture tests passed 4K, 119.88 Hz output and HDR scanout; these checks do not establish sustained game FPS or HDR source content.
 - The 90 FPS profiles are requests; earlier tests received 60 FPS. Server behavior can differ from the selected target.
 - The deeper pipeline currently applies to qualified UHD Main10. H.264 remains at depth one and does not inherit its measured throughput improvement.
-- NVIDIA login is saved and renewed automatically. Persistence through a full console reboot and app replacement still needs live validation. NVIDIA can require sign-in again if renewal credentials expire or are revoked. Audio is stereo only; broader firmware/loader compatibility and more games need testing.
+- NVIDIA login is saved and renewed automatically. Persistence through a full console reboot and app replacement still needs live validation. NVIDIA can require sign-in again if renewal credentials expire or are revoked. Audio falls back to stereo when GFN does not offer a supported surround layout. Live 5.1/7.1 negotiation and speaker placement, broader firmware/loader compatibility and more games need testing.
 
 Performance may differ by game, server, network, display and profile. Requested settings are targets, not guaranteed results. See [stream quality](docs/STREAM_QUALITY.md) for the measurements.
 
 ## Install the alpha
 
-1. Download `OpenNOW-PS5-0.0.6.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
+1. Download `OpenNOW-PS5-0.0.7.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
@@ -85,6 +85,20 @@ In the search keyboard, use the D-pad to select a character and Cross to type it
 
 For existing installations, artwork files can be cached in the registered title metadata. Use the loader's supported refresh or re-registration procedure if the home-screen icon or background remains stale. Replacing the title folder alone may not refresh the background reference.
 
+## Audio selection
+
+Press **R2** in the catalog before launch to cycle **Auto / Stereo / 5.1 / 7.1**.
+Auto probes the PS5 eight-channel AudioOut port; it does not detect physical
+speakers. GFN must offer a valid multichannel Opus layout before surround is
+selected. Unsupported offers fall back to offered stereo audio. All formats use
+48 kHz; requested bitrate ceilings are 256 kb/s stereo, 384 kb/s 5.1 and
+510 kb/s 7.1. Actual received bitrate remains server-controlled.
+
+The adaptive queue, RED recovery and in-band FEC/PLC protect continuity while
+bounding accumulated latency. Private diagnostics distinguish requested and
+negotiated channels, queue depth and received codec bitrate. See
+[stream quality](docs/STREAM_QUALITY.md) for details and remaining limitations.
+
 ## Privacy
 
 NVIDIA login credentials and the device identity are saved in `/data/opennow/account.bin`, outside the installed title, so closing the app, rebooting the PS5 and replacing the app preserve the login. The app restores and renews the saved login automatically; temporary network failures keep the saved credentials and retry. L1+R1 together in the menu signs out and removes the saved login; closing with Circle or stopping a game session keeps it. NVIDIA can still require a new sign-in if the renewal credentials expire or are revoked. The UI reports `ACCOUNT SAVED` or `ACCOUNT NOT SAVED`. The file uses owner-only permissions and contains sensitive credentials without encryption; keep it private.
@@ -118,6 +132,6 @@ Generated packages are written to `dist/`. CI checks host behavior; it does not 
 
 The PS5 platform, decoder and GPU work also builds on public projects including ProsperoLight, the PS5 hardware video research, Kodi PS5, ps5-opengl and the native application boilerplate. Their specific roles, licenses and source revisions are retained in the third-party notices and source headers.
 
-See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.6.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
+See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.7.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
 
 The combined native application is **GPL-3.0-or-later**. Third-party components retain their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `licenses/` and source headers. Exact upstream revisions and hashes are recorded in [upstream-lock.json](upstream-lock.json). Public dependency retrieval/build scripts and local GPU modifications are included; no captured game content is distributed.

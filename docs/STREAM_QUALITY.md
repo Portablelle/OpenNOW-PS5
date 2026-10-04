@@ -1,4 +1,4 @@
-# Native stream quality — 00.002.026
+# Native stream quality — 00.002.037
 
 Press **L1** in the catalog before launching a game to cycle targets. Selection is kept for this app run. Stop an active session with Options + Touchpad before changing quality.
 
@@ -14,17 +14,37 @@ Press **L1** in the catalog before launching a game to cycle targets. Selection 
 | Experimental | 1920 × 1080 at 60 FPS | 75 Mb/s |
 | Compatibility | 1280 × 720 at 30 FPS | 10 Mb/s |
 
-Startup selects the highest profile that passes native decoder/GPU/display qualification. The four software profiles remain selectable, and all profiles use stereo audio. Native HDR requests HEVC Main10/PQ; other profiles request H.264 SDR. Cloud allocation, network-test profile, peer resolution, SDP bandwidth and NVST viewport/FPS/bitrate use the same selection. These are requests, not guarantees from the server. GFN can reduce bitrate/resolution; raising the bitrate does not increase the game's render FPS. Network bandwidth to the GFN server, subscription capabilities and software decoding throughput still matter even on gigabit Ethernet.
+Startup selects the highest profile that passes native decoder/GPU/display qualification. The four software profiles remain selectable, and audio selection is independent of the video profile. Native HDR requests HEVC Main10/PQ; other profiles request H.264 SDR. Cloud allocation, network-test profile, peer resolution, SDP bandwidth and NVST viewport/FPS/bitrate use the same selection. These are requests, not guarantees from the server. GFN can reduce bitrate/resolution; raising the bitrate does not increase the game's render FPS. Network bandwidth to the GFN server, subscription capabilities and software decoding throughput still matter even on gigabit Ethernet.
 
 The software path fills a 1920 × 1080 canvas; the GPU build presents it through its selected native scanout. 1080p frames retain their resolution instead of being reduced to 720p. Lower-resolution frames are bilinearly scaled to 1080p. YUV-to-RGB conversion respects limited/full range and the BT.709/BT.601 matrix. Upscaling a software 1080p picture does not make its source 4K. Qualified native profiles import decoder surfaces directly into the GPU at their requested resolution.
 
-Audio remains 48 kHz stereo signed 16-bit PCM through AudioOut. The SDP explicitly requests Opus stereo with a 256 kb/s ceiling; the server chooses the actual encoded bitrate. Missing audio up to 60 ms uses a matching redundant Opus block when available, otherwise Opus packet-loss concealment. Larger or invalid timestamp gaps reset the audio epoch. The 40 ms initial audio prebuffer is retained. Overflow discards the oldest excess samples instead of clearing all buffered sound. This does not implement surround sound or a full audio/video synchronization clock.
+## Audio
+
+Press **R2** in the catalog to cycle **Auto / Stereo / 5.1 / 7.1** before launch. Selection lasts for this app run. All modes use Opus at 48 kHz and signed 16-bit PCM output.
+
+| Negotiated format | Requested Opus bitrate ceiling | AudioOut PCM channels |
+| --- | --- | --- |
+| Stereo | 256 kb/s | 2, or FL/FR in an already opened 8-channel port |
+| 5.1 | 384 kb/s | 8, with unused channels silent |
+| 7.1 | 510 kb/s | 8 |
+
+Auto requests the widest layout the PS5 output port can accept. Startup probes the eight-channel AudioOut format and closes the probe handle; if unavailable, requests are capped at stereo. **This probes the API port, not the physical speaker count or HDMI receiver capabilities.** Output routing/downmix remains under the PS5 system configuration. Stereo can be explicitly selected for headphones or two-speaker systems.
+
+CloudMatch requests the selected channel count and audio format. WebRTC selects only an Opus stereo or explicitly described `multiopus/48000/6` / `multiopus/48000/8` layout actually listed in the server's audio section. Stream counts, coupled streams and a complete channel mapping must be valid. The widest supported offer at or below the request wins; a stereo-only or malformed surround offer falls back to an offered stereo codec. Missing supported audio fails negotiation rather than decoding an unknown layout. Opus multistream output uses the server's mapping, then converts family-1 speaker order to AudioOut format 2 (FL, FR, FC, LFE, BL, BR, SL, SR). Dynamic audio/RED RTP payload numbers follow the negotiated offer. If a seat describes surround but initially sends eight consecutive valid elementary stereo packets with no successful surround decode, playback switches to stereo for that session. An established surround stream is not downgraded by isolated packet damage.
+
+Missing audio up to 60 ms uses a matching redundant Opus block when offered. For one missing packet, the decoder can attempt in-band FEC from the next packet; Opus supplies PLC if FEC is absent, and diagnostics count FEC attempts separately from confirmed RED recovery. Larger or invalid timestamp gaps clear and restart the audio epoch. The jitter reserve starts at 20 ms, in addition to one packet (40 ms startup buffering for 20 ms packets), and rises to 40 ms after repeated starvation. Queue excess is bounded to twice the reserve or one complete Opus packet, capped at 120 ms; overflow keeps the newest continuous samples. Output uses 256-frame grains with silent tails on underrun.
+
+Private logs and `live-video.status` record requested/negotiated channels, primary encoded bytes and decoded sample counts, current/peak queue depth, dropped audio frames, output errors, RED recovery, FEC attempts and underruns. The byte/sample ratio estimates the received primary codec bitrate; it excludes RED and transport overhead. Queue depth is not end-to-end latency. A full audio/video synchronization clock, physical speaker detection, lossless audio and Atmos are not implemented.
+
+The audio changes have host ASan/UBSan coverage for allocation, SDP fallback, malformed layouts, payload parsing, channel placement, queue overflow/wrap, re-priming and sustained 20 ms packets at 256-frame output grains. Native compilation/linking/import validation and live console validation are separate. **No live 5.1/7.1 GFN or speaker-placement result is established by synthetic tests.** Servers may still offer only stereo on this WebRTC transport; this change does not add the separate native RTSP/NVST transport.
+
+Protocol references: [OpenNOW-Mac session audio request](https://github.com/OpenCloudGaming/OpenNOW-Mac/blob/d9fc3d6b7ea78b7bb1e331789daa25740b8794de/OPN/GameServices/OPNSessionPayloads.swift), [Opus multistream layout](https://github.com/OpenCloudGaming/OpenNOW-Mac/blob/d9fc3d6b7ea78b7bb1e331789daa25740b8794de/GFN/NVST/BifrostFree/NvstOpusMultistreamLayout.swift), and the already pinned PS5 hardware-video research AudioOut eight-channel path. Existing pins remain unchanged.
 
 ## Console testing
 
 Start with Quality. Check motion, text sharpness, input latency, sound continuity and private media counters. Compare Smooth if the software decoder drops frames. Try Experimental at 75 Mb/s only after lower targets behave well; return to Compatibility if the higher target stutters or fails. The frame rate requested is not an on-console performance measurement. Counter logs include decoded frames, dropped access units, audio recoveries/concealments/underruns and the selected target. No credentials or media payloads are logged.
 
-The host suite validates profile consistency across allocation and negotiation, audio payload parsing and bounded recovery/wraparound. The VPS build checks native compilation, linking, packaging and imports. New profiles, actual stereo negotiation, color reproduction, CPU/heap load and end-to-end latency still require live console testing.
+The host suite validates profile consistency across allocation and negotiation, audio payload parsing and bounded recovery/wraparound. The VPS build checks native compilation, linking, packaging and imports. New audio modes, actual multichannel negotiation/speaker placement, color reproduction, CPU/heap load and end-to-end latency still require live console testing.
 
 ## Native video qualification
 

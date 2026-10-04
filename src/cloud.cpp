@@ -100,7 +100,7 @@ void Cloud::load(const char* jwt,const char* device,const char* search,bool next
     if(!parseCatalog(r,view_,cursor_,sizeof(cursor_))){char msg[128];std::snprintf(msg,sizeof(msg),"Catalog request failed (HTTP %ld)",r.status);fail(msg);}
 }
 void Cloud::select(int delta) noexcept {if(view_.state!=CloudState::catalog||!view_.count)return;view_.selected=(view_.selected+view_.count+delta)%view_.count;}
-void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int userAge,StreamProfile profile) noexcept {
+void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int userAge,StreamProfile profile,unsigned audioChannels) noexcept {
     if(view_.state!=CloudState::catalog||view_.selected>=view_.count||*session_.id)return;
     if(userAge<0||userAge>120){fail("Set your age in the private launch configuration first");return;}
     const auto& game=view_.games[view_.selected];
@@ -108,6 +108,7 @@ void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int user
     for(const char* digit=game.id;*digit;++digit)if(*digit<'0'||*digit>'9'){fail("Catalog variant has no numeric launch ID");return;}
     const auto settings=settingsFor(profile);
     session_.profile=profile;
+    session_.audioChannels=audioChannels==8?8:audioChannels==6?6:2;
     char netId[128]{},netUrl[768],netBody[256];
     std::snprintf(netUrl,sizeof(netUrl),"%sv2/nettestsession",base_);
     std::snprintf(netBody,sizeof(netBody),
@@ -132,10 +133,12 @@ void Cloud::launch(const char* jwt,const char* device,std::uint64_t now,int user
     auto* features=cJSON_AddObjectToObject(req,"requestedStreamingFeatures");
     for(auto* key:{"reflex","cloudGsync","enabledL4S","trueHdr","fallbackToLogicalResolution","vsync"})cJSON_AddBoolToObject(features,key,false);
     for(auto* key:{"mouseMovementFlags","supportedHidDevices","profile","chromaFormat","prefilterMode","prefilterSharpness","prefilterNoiseReduction","hudStreamingMode","hdrColorSpace"})cJSON_AddNumberToObject(features,key,0);
-    cJSON_AddNumberToObject(features,"bitDepth",settings.hdr?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec==VideoCodec::hevc?2:1);if(!settings.hardware)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",2);
+    cJSON_AddNumberToObject(features,"bitDepth",settings.hdr?1:0);cJSON_AddNullToObject(features,"hidDevices");cJSON_AddNumberToObject(features,"sdrColorSpace",2);cJSON_AddNumberToObject(features,"maxBitrateKbps",settings.bitrate_kbps);cJSON_AddNumberToObject(features,"codec",settings.codec==VideoCodec::hevc?2:1);if(!settings.hardware)cJSON_AddNumberToObject(features,"dynamicStreamingMode",3);cJSON_AddNumberToObject(features,"audioChannelCount",session_.audioChannels);
+    cJSON_AddNumberToObject(req,"requestedAudioFormat",session_.audioChannels==8?3:session_.audioChannels==6?2:1);
     auto* meta=cJSON_AddArrayToObject(req,"metaData");
-    const char* keys[]={"SubSessionId","wssignaling","GSStreamerType"};const char* values[]={device,"1","WebRTC"};
-    for(int i=0;i<3;++i){auto* m=cJSON_CreateObject();cJSON_AddStringToObject(m,"key",keys[i]);cJSON_AddStringToObject(m,"value",values[i]);cJSON_AddItemToArray(meta,m);}
+    const auto audioCount=std::to_string(session_.audioChannels);
+    const char* keys[]={"SubSessionId","wssignaling","GSStreamerType","surroundAudioInfo"};const char* values[]={device,"1","WebRTC",audioCount.c_str()};
+    for(int i=0;i<4;++i){auto* m=cJSON_CreateObject();cJSON_AddStringToObject(m,"key",keys[i]);cJSON_AddStringToObject(m,"value",values[i]);cJSON_AddItemToArray(meta,m);}
     auto* monitors=cJSON_AddArrayToObject(req,"clientRequestMonitorSettings");auto* monitor=cJSON_CreateObject();cJSON_AddItemToArray(monitors,monitor);
     for(auto* key:{"monitorId","positionX","positionY"})cJSON_AddNumberToObject(monitor,key,0);
     cJSON_AddNumberToObject(monitor,"widthInPixels",settings.width);cJSON_AddNumberToObject(monitor,"heightInPixels",settings.height);cJSON_AddNumberToObject(monitor,"framesPerSecond",settings.fps);cJSON_AddNumberToObject(monitor,"dpi",100);cJSON_AddNumberToObject(monitor,"sdrHdrMode",settings.hdr?1:0);if(settings.hdr){auto* display=cJSON_AddObjectToObject(monitor,"displayData");

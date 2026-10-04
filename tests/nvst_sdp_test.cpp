@@ -117,9 +117,10 @@ int main()
         selected=opennow::nextProfile(selected);
     }
     assert(selected==opennow::StreamProfile::native_hdr120);
+    const std::string audioOffer="m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n";
     const std::string hevcOffer="v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 98 100\r\na=rtpmap:98 H264/90000\r\na=rtpmap:100 H265/90000\r\na=fmtp:100 profile-id=2;level-id=156;sprop-max-don-diff=0\r\n";
     const std::string rawHevc="v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H265/90000\r\na=fmtp:96 profile-id=2;level-id=156;sprop-max-don-diff=0\r\n";
-    const auto hdrAnswer=opennow::sdp::AdaptAnswerSdpToOffer(rawHevc,hevcOffer,hdr);
+    const auto hdrAnswer=opennow::sdp::AdaptAnswerSdpToOffer(rawHevc+audioOffer,hevcOffer+audioOffer,hdr);
     assert(hdrAnswer.find("a=rtpmap:100 H265/90000")!=std::string::npos);
     assert(hdrAnswer.find("profile-id=2;level-id=156")!=std::string::npos);
     const auto hdrSdp=opennow::webrtc::BuildNvstSdp(hdrAnswer,hdr,{});
