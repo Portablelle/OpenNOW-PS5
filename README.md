@@ -4,6 +4,11 @@
 
 # OpenNOW PS5
 
+> **This repository is archived.** Development now continues at
+> [OpenCloudGaming/OpenNOW-PS5](https://github.com/OpenCloudGaming/OpenNOW-PS5).
+> Please use that repository for future updates, issues and contributions.
+> This repository remains available for historical source code and releases.
+
 ![OpenNOW PS5 — native cloud gaming, 0.0.1-alpha functional prototype](docs/branding/opennow-social-preview.png)
 
 *Social preview artwork for the independent native PS5 prototype.*
