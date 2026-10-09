@@ -12,7 +12,7 @@ An experimental native PS5 homebrew client for GeForce NOW, based on the public 
 
 **This is a working, console-tested prototype, not a finished application.** You can sign in, launch a game and play. The interface is still rough and primarily exists to test that authentication, streaming, audio, video and controls work together. Expect an incomplete user experience, limited navigation and functionality that still needs further testing.
 
-**Latest prerelease: [0.0.7](https://github.com/Portablelle/opennow-ps5/releases/tag/0.0.7)** — development build `00.002.037`, title ID `PPSA99082`, with Auto / Stereo / 5.1 / 7.1 audio selection, validated multichannel offer handling and adaptive audio buffering. This project is unofficial and unaffiliated with Sony or NVIDIA.
+**Latest prerelease: [0.1](https://github.com/Portablelle/opennow-ps5/releases/tag/0.1)** — development build `00.002.038`, title ID `PPSA99082`, with FTP-accessible launch-age configuration, persistent login, virtual keyboard/mouse and Auto / Stereo / 5.1 / 7.1 audio selection. This project is unofficial and unaffiliated with Sony or NVIDIA.
 
 ## What works
 
@@ -36,7 +36,7 @@ Performance may differ by game, server, network, display and profile. Requested 
 
 ## Install the alpha
 
-1. Download `OpenNOW-PS5-0.0.7.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
+1. Download `OpenNOW-PS5-0.1.zip` and `SHA256SUMS` from [Releases](https://github.com/Portablelle/opennow-ps5/releases).
 2. Verify the ZIP against its entry in `SHA256SUMS` using `shasum -a 256` or `sha256sum`. If you download every listed asset, you can use `shasum -a 256 -c SHA256SUMS`.
 3. Extract the archive. Install the included `PPSA99082` folder through a compatible native homebrew directory loader, such as ShadowMountPlus. Follow your loader's registration procedure and check that this title ID is unused.
 4. Before replacing an existing installation, close OpenNOW completely and retain a backup of its title folder.
@@ -132,6 +132,6 @@ Generated packages are written to `dist/`. CI checks host behavior; it does not 
 
 The PS5 platform, decoder and GPU work also builds on public projects including ProsperoLight, the PS5 hardware video research, Kodi PS5, ps5-opengl and the native application boilerplate. Their specific roles, licenses and source revisions are retained in the third-party notices and source headers.
 
-See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.0.7.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
+See [port history and measured results](docs/PORT_STATUS.md), [release notes](docs/releases/0.1.md) and [contributing](CONTRIBUTING.md). Other boilerplate documentation covers optional tooling and may describe workflows outside the GPU release path.
 
 The combined native application is **GPL-3.0-or-later**. Third-party components retain their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `licenses/` and source headers. Exact upstream revisions and hashes are recorded in [upstream-lock.json](upstream-lock.json). Public dependency retrieval/build scripts and local GPU modifications are included; no captured game content is distributed.
