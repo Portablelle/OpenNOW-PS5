@@ -2,6 +2,7 @@
 #include "demo_renderer.hpp"
 #include "gfn.hpp"
 #include "account_file.hpp"
+#include "launch_config.hpp"
 #include "http.hpp"
 #include "random.hpp"
 #include "cloud.hpp"
@@ -80,8 +81,12 @@ void* worker(void*) {
 #ifndef OPENNOW_HOST_PREVIEW
     static opennow::Stream stream(media);
 #endif
-    if (opennow::accountFile::makeDirectory("/data/opennow",0700)==0)
-        opennow::accountFile::syncParent("/data/opennow");
+    if (!opennow::accountFile::prepareDirectory("/data/opennow",0755) ||
+        !opennow::accountFile::prepareDirectory("/data/opennow/config",01777)) {
+        opennow::View v; v.state=State::failed;
+        std::snprintf(v.message,sizeof(v.message),"Unable to prepare /data/opennow permissions");
+        publish(v); return nullptr;
+    }
     opennow::View restoring; restoring.state=State::requesting;
     std::snprintf(restoring.message,sizeof(restoring.message),"Checking saved NVIDIA login...");
     publish(restoring);
@@ -142,11 +147,8 @@ void* worker(void*) {
             if(action==4)cloud.select(1);
             if(action==5){
                 // Personal launch configuration is separate from the distributable title.
-                int age=-1;char trailing=0;
-                if(FILE* config=std::fopen("/data/opennow/launch-age.txt","r")){
-                    if(std::fscanf(config,"%d %c",&age,&trailing)!=1)age=-1;
-                    std::fclose(config);
-                }
+                const int age = opennow::launchConfig::readAge(
+                    "/data/opennow/config/launch-age.txt","/data/opennow/launch-age.txt");
                 cloud.launch(login.cloudToken(),id,now/1000000,age,profile,opennow::audio::requestedChannels(audioMode,audioCapacity));streamAttempted=false;
             }
             if(action==6)cloud.load(login.cloudToken(),id,"",false);
