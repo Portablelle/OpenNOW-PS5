@@ -75,4 +75,15 @@ inline bool syncParent(const char* path) noexcept {
     const bool ok = accountFile::sync(fd) == 0;
     return accountFile::close(fd) == 0 && ok;
 }
+inline bool prepareDirectory(const char* path,unsigned mode) noexcept {
+    const bool created = accountFile::makeDirectory(path,mode) == 0;
+    if (!created && errno != EEXIST) return false;
+    const int fd = accountFile::open(path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+    if (fd < 0) return false;
+    // Repair directories created with 0700 and override a restrictive umask.
+    const bool ok = accountFile::permissions(fd,mode) == 0;
+    const bool closed = accountFile::close(fd) == 0;
+    if (created) accountFile::syncParent(path);
+    return ok && closed;
+}
 }

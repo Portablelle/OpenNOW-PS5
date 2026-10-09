@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gfn.hpp"
+#include "account_file.hpp"
+#include "launch_config.hpp"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +64,62 @@ int main() {
     signIn(path.c_str());
     struct stat info{}; assert(stat(path.c_str(),&info) == 0);
     assert((info.st_mode & 0777) == 0600);
+    {
+        // An upgrade repairs the old private directory without changing login data.
+        const auto saved = contents(path.c_str());
+        assert(chmod(directory,0700) == 0);
+        assert(opennow::accountFile::prepareDirectory(directory,0755));
+        assert(stat(directory,&info) == 0);
+        assert((info.st_mode & 07777) == 0755);
+        assert(contents(path.c_str()) == saved);
+        assert(stat(path.c_str(),&info) == 0);
+        assert((info.st_mode & 0777) == 0600);
+        assert(opennow::accountFile::prepareDirectory(directory,0755));
+
+        const auto freshDirectory = std::string(directory) + "/fresh";
+        const auto mask = umask(0077);
+        const bool prepared = opennow::accountFile::prepareDirectory(freshDirectory.c_str(),01777);
+        umask(mask);
+        assert(prepared);
+        assert(stat(freshDirectory.c_str(),&info) == 0);
+        assert((info.st_mode & 07777) == 01777);
+        const auto link = std::string(directory) + "/link";
+        assert(symlink(freshDirectory.c_str(),link.c_str()) == 0);
+        assert(!opennow::accountFile::prepareDirectory(link.c_str(),01777));
+        assert(!opennow::accountFile::prepareDirectory(path.c_str(),0755));
+        const auto agePath = freshDirectory + "/launch-age.txt";
+        const auto legacyAgePath = std::string(directory) + "/launch-age.txt";
+        const auto writeAge = [](const std::string& name,const char* value) {
+            FILE* file = std::fopen(name.c_str(),"wb"); assert(file);
+            assert(std::fputs(value,file) >= 0);
+            assert(std::fclose(file) == 0);
+        };
+        const auto readAge = [&] {
+            return opennow::launchConfig::readAge(agePath.c_str(),legacyAgePath.c_str());
+        };
+        assert(readAge() == -1);
+        writeAge(legacyAgePath,"42\n");
+        assert(readAge() == 42);
+        writeAge(agePath,"18\n");
+        assert(readAge() == 18);
+        for (const char* invalid : {"", "121", "-1", "18 extra", "18.5",
+                                   "999999999999999999999999999999999999"}) {
+            writeAge(agePath,invalid);
+            assert(readAge() == -1); // Invalid new config must not use the legacy age.
+        }
+        writeAge(agePath," 0 \n"); assert(readAge() == 0);
+        writeAge(agePath,"120\n"); assert(readAge() == 120);
+        assert(unlink(agePath.c_str()) == 0);
+        assert(symlink(legacyAgePath.c_str(),agePath.c_str()) == 0);
+        assert(readAge() == -1);
+        assert(unlink(agePath.c_str()) == 0);
+        assert(mkfifo(agePath.c_str(),0644) == 0);
+        assert(readAge() == -1); // Must return without waiting for a writer.
+        assert(unlink(agePath.c_str()) == 0);
+        assert(unlink(legacyAgePath.c_str()) == 0);
+        assert(unlink(link.c_str()) == 0);
+        assert(rmdir(freshDirectory.c_str()) == 0);
+    }
     {
         // A new Login instance models process restart/app replacement. Device ID and
         // cloud JWT survive renewal responses that omit id_token.
